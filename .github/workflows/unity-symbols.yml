@@ -2,8 +2,8 @@ name: unity-symbols
 
 on:
   schedule:
-    # Every two hours, off the hour to avoid the busiest minute.
-    - cron: '17 */2 * * *'
+    # Twice an hour, offset from :00 and :30 to avoid the busiest minutes.
+    - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
       limit:

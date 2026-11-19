@@ -3,7 +3,7 @@
 A periodic, idempotent GitHub Action that publishes the Unity Android
 `il2cpp/Development` `arm64-v8a` player library and its symbol table.
 
-Every two hours the workflow lists Unity releases, skips versions whose GitHub
+Every 30 minutes the workflow lists Unity releases, skips versions whose GitHub
 Release is already complete, then downloads, extracts, converts, and publishes
 up to two versions, newest first.
 
@@ -33,8 +33,8 @@ are listed under `duplicate_symbols`.
 ## Decisions
 
 - **Scope**: `LTS` + `SUPPORTED` streams, no `TECH`/`BETA`/`ALPHA`.
-- **No backfill**: history is covered gradually by the schedule (~24 versions a
-  day, newest first).
+- **No backfill**: history is covered gradually by the schedule (~48 runs a day,
+  two versions per run, so about 5 days for the LTS backlog; newest first).
 - **Package**: the macOS/Linux `MacEditorTargetInstaller/*.pkg` (~0.68 GB). The
   Windows `TargetSupportInstaller/*.exe` is smaller (~0.48 GB) but its modified
   NSIS payload is not readable by 7-Zip, so the `.pkg` is used.
