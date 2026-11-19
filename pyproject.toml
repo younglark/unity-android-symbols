@@ -1,0 +1,13 @@
+[project]
+name = "unity-android-symbols"
+version = "0.1.0"
+description = "Publish Unity Android il2cpp Development libunity and symbol tables"
+requires-python = ">=3.11"
+dependencies = ["pyelftools>=0.31"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

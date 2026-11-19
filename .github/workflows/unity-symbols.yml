@@ -1,0 +1,43 @@
+name: unity-symbols
+
+on:
+  schedule:
+    # Every two hours, off the hour to avoid the busiest minute.
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Versions to process in this run
+        required: false
+        default: '2'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unity-symbols
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install 7-Zip
+        run: sudo apt-get update && sudo apt-get install -y 7zip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Publish pending versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          LIMIT: ${{ github.event.inputs.limit || '2' }}
+        run: python -m unity_symbols.main --limit "$LIMIT"
