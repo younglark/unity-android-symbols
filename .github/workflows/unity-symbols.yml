@@ -10,6 +10,10 @@ on:
         description: Versions to process in this run
         required: false
         default: '2'
+      version:
+        description: Process only this Unity version (for example 2022.3.62f1)
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -40,4 +44,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           LIMIT: ${{ github.event.inputs.limit || '2' }}
-        run: python -m unity_symbols.main --limit "$LIMIT"
+          VERSION: ${{ github.event.inputs.version }}
+        run: python -m unity_symbols.main --limit "$LIMIT" --version "$VERSION"

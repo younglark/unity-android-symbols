@@ -51,6 +51,19 @@ are listed under `duplicate_symbols`.
 - **Compliance**: the repository is public and republishes Unity binaries. This
   is a deliberate, risk-accepted choice; the artifacts are removed on request.
 
+## Manual runs
+
+```sh
+# process the next pending versions (default limit 2)
+gh workflow run unity-symbols.yml
+
+# process exactly one version, even an old one outside the newest-first queue
+gh workflow run unity-symbols.yml -f version=2022.3.62f1
+```
+
+A requested version that is already complete is a no-op; an unknown version, or
+one without an Android package, fails the run with a clear message.
+
 ## Running locally
 
 ```sh

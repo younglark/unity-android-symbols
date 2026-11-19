@@ -11,24 +11,25 @@ from unity_symbols.extract import DownloadError
 from unity_symbols.main import asset_names, process_release
 
 
-def make_release():
+def make_release(version="2022.3.62f1", revision="aaa"):
     return Release(
-        version="2022.3.62f1",
-        revision="aaa",
+        version=version,
+        revision=revision,
         stream="LTS",
         release_date="2024-02-01T00:00:00Z",
-        package_url="https://download/aaa.pkg",
+        package_url=f"https://download/{revision}.pkg",
         package_size=677,
     )
 
 
 class RecordingStore:
-    def __init__(self):
+    def __init__(self, complete=()):
         self.events = []
         self.uploaded = {}
+        self.complete = set(complete)
 
     def is_complete(self, tag, asset_names):
-        return False
+        return tag in self.complete
 
     def ensure_draft(self, tag, title):
         self.events.append(("draft", tag, title))
@@ -181,6 +182,48 @@ def test_process_release_propagates_download_failure(tmp_path):
             finder=lambda root: None,
             parser=lambda path: ({}, []),
         )
+
+
+def test_main_processes_only_the_requested_version(monkeypatch, capsys):
+    releases = [make_release("6000.0.85f2", "bbb"), make_release("2022.3.62f1", "aaa")]
+    monkeypatch.setattr(main_module, "fetch_releases", lambda streams: releases)
+    monkeypatch.setattr(main_module, "ReleaseStore", lambda repo: RecordingStore())
+    processed = []
+
+    def fake_process(release, store, workdir):
+        processed.append(release.version)
+        return {"version": release.version, "revision": release.revision,
+                "tag": release.tag, "status": "published", "symbols": 1}
+
+    monkeypatch.setattr(main_module, "process_release", fake_process)
+
+    exit_code = main_module.main(["--repo", "owner/repo", "--version", "2022.3.62f1"])
+
+    assert exit_code == 0
+    assert processed == ["2022.3.62f1"]
+
+
+def test_main_skips_a_requested_version_that_is_already_complete(monkeypatch, capsys):
+    release = make_release()
+    monkeypatch.setattr(main_module, "fetch_releases", lambda streams: [release])
+    monkeypatch.setattr(main_module, "ReleaseStore", lambda repo: RecordingStore({release.tag}))
+    monkeypatch.setattr(
+        main_module, "process_release", lambda *args: pytest.fail("must not publish")
+    )
+
+    exit_code = main_module.main(["--repo", "owner/repo", "--version", release.version])
+
+    assert exit_code == 0
+    assert "already complete" in capsys.readouterr().out
+
+
+def test_main_rejects_an_unknown_version(monkeypatch, capsys):
+    monkeypatch.setattr(main_module, "fetch_releases", lambda streams: [make_release()])
+
+    exit_code = main_module.main(["--repo", "owner/repo", "--version", "1999.1.1f1"])
+
+    assert exit_code == 1
+    assert "not found" in capsys.readouterr().err
 
 
 def test_main_dry_run_lists_pending_without_network(monkeypatch, capsys):

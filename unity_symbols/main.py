@@ -151,6 +151,8 @@ def _write_summary(rows: list[dict], error: str | None = None) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=int(os.environ.get("LIMIT", "2")))
+    parser.add_argument("--version", default=os.environ.get("VERSION") or None,
+                        help="process only this Unity version (e.g. 2022.3.62f1)")
     parser.add_argument("--streams", default=",".join(STREAMS))
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--dry-run", action="store_true")
@@ -161,21 +163,41 @@ def main(argv=None) -> int:
     releases = fetch_releases(streams=streams)
     print(f"catalog: {len(releases)} releases across {streams}")
 
+    if args.version:
+        matches = [release for release in releases if release.version == args.version]
+        if not matches:
+            print(f"error: Unity version not found in the catalog: {args.version}", file=sys.stderr)
+            return 1
+        requested = matches[0]
+        if requested.package_url is None:
+            print(f"error: no Android pkg for Unity {requested.version}", file=sys.stderr)
+            return 1
+        releases_to_consider = [requested]
+    else:
+        releases_to_consider = releases
+
     if args.dry_run:
         store = None
-        pending = [release for release in releases if release.package_url][: args.limit]
+        if args.version:
+            pending = releases_to_consider
+        else:
+            pending = [release for release in releases_to_consider if release.package_url][: args.limit]
     else:
         if not args.repo:
             print("error: --repo or GITHUB_REPOSITORY is required", file=sys.stderr)
             return 2
         store = ReleaseStore(args.repo)
         pending = select_pending(
-            releases,
+            releases_to_consider,
             lambda release: store.is_complete(
                 release.tag, asset_names(release.version, release.revision)
             ),
-            args.limit,
+            args.limit if not args.version else 1,
         )
+        if args.version and not pending:
+            print(f"Unity {args.version} is already complete; nothing to do")
+            _write_summary([])
+            return 0
 
     if not pending:
         print("nothing to publish")
