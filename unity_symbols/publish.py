@@ -27,10 +27,35 @@ class ReleaseStore:
         )
 
     def get(self, tag: str):
+        """Return the release for ``tag``, including drafts.
+
+        ``GET /releases/tags/{tag}`` omits drafts, so a list lookup is used as a
+        fallback; drafts are what an interrupted run leaves behind.
+        """
         result = self._gh(["api", f"repos/{self.repo}/releases/tags/{tag}"], check=False)
-        if result.returncode != 0:
-            return None
-        return json.loads(result.stdout)
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+        for page in range(1, 6):
+            listing = self._gh(
+                ["api", f"repos/{self.repo}/releases?per_page=100&page={page}"], check=False
+            )
+            if listing.returncode != 0:
+                return None
+            releases = json.loads(listing.stdout)
+            for release in releases:
+                if release.get("tag_name") == tag:
+                    return release
+            if len(releases) < 100:
+                break
+        return None
+
+    def ensure_draft(self, tag: str, title: str):
+        """Create the draft only when no release for the tag exists yet."""
+        release = self.get(tag)
+        if release is None:
+            self.create_draft(tag, title)
+            return self.get(tag)
+        return release
 
     def is_complete(self, tag: str, asset_names) -> bool:
         release = self.get(tag)

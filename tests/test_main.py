@@ -28,6 +28,9 @@ class RecordingStore:
     def is_complete(self, tag, asset_names):
         return False
 
+    def ensure_draft(self, tag, title):
+        self.events.append(("draft", tag, title))
+
     def create_draft(self, tag, title):
         self.events.append(("draft", tag, title))
 

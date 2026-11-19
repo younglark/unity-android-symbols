@@ -84,7 +84,7 @@ def process_release(release, store, workdir, *, downloader=download, extractor=e
         }
         files[3].write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
 
-        store.create_draft(tag, f"Unity {release.version} ({release.revision})")
+        store.ensure_draft(tag, f"Unity {release.version} ({release.revision})")
         store.upload(tag, files)
         store.publish(tag)
 

@@ -22,17 +22,37 @@ def not_found():
     return SimpleNamespace(returncode=1, stdout="", stderr="Not Found")
 
 
-def release_json(*, draft, assets):
-    return ok(json.dumps({"draft": draft, "assets": assets}))
+def release(*, draft, assets=None, tag="tag"):
+    return ok(json.dumps({"tag_name": tag, "draft": draft, "assets": assets or []}))
+
+
+def listing(*releases):
+    return ok(json.dumps(list(releases)))
+
+
+def test_get_reads_drafts_through_the_list_endpoint():
+    runner = FakeRunner(
+        [
+            not_found(),
+            listing({"tag_name": "tag", "draft": True, "assets": []}),
+        ]
+    )
+    store = ReleaseStore("owner/repo", runner=runner)
+
+    result = store.get("tag")
+
+    assert result["draft"] is True
+    assert runner.calls[1][0][2].startswith("repos/owner/repo/releases?per_page=100")
 
 
 def test_is_complete_requires_published_assets_with_size():
     runner = FakeRunner(
         [
-            release_json(draft=True, assets=[{"name": "a", "size": 1}]),
-            release_json(draft=False, assets=[{"name": "a", "size": 1}, {"name": "b", "size": 0}]),
-            release_json(draft=False, assets=[{"name": "a", "size": 1}, {"name": "b", "size": 2}]),
+            release(draft=True),
+            release(draft=False, assets=[{"name": "a", "size": 1}, {"name": "b", "size": 0}]),
+            release(draft=False, assets=[{"name": "a", "size": 1}, {"name": "b", "size": 2}]),
             not_found(),
+            listing(),
         ]
     )
     store = ReleaseStore("owner/repo", runner=runner)
@@ -40,7 +60,33 @@ def test_is_complete_requires_published_assets_with_size():
     assert store.is_complete("tag", ["a", "b"]) is False  # draft
     assert store.is_complete("tag", ["a", "b"]) is False  # zero-sized asset
     assert store.is_complete("tag", ["a", "b"]) is True
-    assert store.is_complete("tag", ["a", "b"]) is False  # missing release
+    assert store.is_complete("tag", ["a", "b"]) is False  # no release at all
+
+
+def test_ensure_draft_creates_only_when_missing():
+    runner = FakeRunner(
+        [
+            not_found(),
+            listing(),
+            ok(),  # create
+            release(draft=True),
+        ]
+    )
+    store = ReleaseStore("owner/repo", runner=runner)
+
+    created = store.ensure_draft("tag", "Title")
+
+    assert created["draft"] is True
+    commands = [command for command, _ in runner.calls]
+    assert commands[2][:3] == ["gh", "release", "create"]
+
+    runner = FakeRunner([release(draft=True)])
+    store = ReleaseStore("owner/repo", runner=runner)
+
+    existing = store.ensure_draft("tag", "Title")
+
+    assert existing["draft"] is True
+    assert all(command[:3] != ["gh", "release", "create"] for command, _ in runner.calls)
 
 
 def test_publish_flow_creates_draft_then_uploads_then_publishes(tmp_path):
