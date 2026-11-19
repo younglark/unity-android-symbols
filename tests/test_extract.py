@@ -165,6 +165,38 @@ def test_extract_pkg_reads_nested_payload(tmp_path):
     assert find_development_libs(root) == (root / LIB, root / SYM)
 
 
+def test_extract_pkg_accepts_payload_tilde_from_older_7zip(tmp_path):
+    # Ubuntu 24.04 ships 7-Zip 23, which extracts the member as "Payload~".
+    payload = gzip_bytes(make_odc([odc_entry(f"./{LIB}", b"LIB"), odc_entry(f"./{SYM}", b"SYM")]))
+
+    def runner(command, **kwargs):
+        output = Path(next(part[2:] for part in command if part.startswith("-o")))
+        nested = output / "TargetSupport.pkg.tmp"
+        nested.mkdir(parents=True, exist_ok=True)
+        (nested / "Payload~").write_bytes(payload)
+
+    root = extract_pkg("android-support.pkg", tmp_path / "expanded", runner=runner)
+
+    assert (root / LIB).read_bytes() == b"LIB"
+    assert (root / SYM).read_bytes() == b"SYM"
+
+
+def test_extract_pkg_accepts_raw_cpio_payload(tmp_path):
+    # 7-Zip 23 on Ubuntu decodes the xar gzip encoding and writes raw cpio.
+    payload = make_odc([odc_entry(f"./{LIB}", b"LIB"), odc_entry(f"./{SYM}", b"SYM")])
+
+    def runner(command, **kwargs):
+        output = Path(next(part[2:] for part in command if part.startswith("-o")))
+        nested = output / "TargetSupport.pkg.tmp"
+        nested.mkdir(parents=True, exist_ok=True)
+        (nested / "Payload~").write_bytes(payload)
+
+    root = extract_pkg("android-support.pkg", tmp_path / "expanded", runner=runner)
+
+    assert (root / LIB).read_bytes() == b"LIB"
+    assert (root / SYM).read_bytes() == b"SYM"
+
+
 def test_extract_pkg_requires_payload(tmp_path):
     def runner(command, **kwargs):
         return None

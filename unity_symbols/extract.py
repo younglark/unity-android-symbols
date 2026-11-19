@@ -186,10 +186,19 @@ def extract_cpio(stream, destination, wanted=None) -> int:
 
 
 def _find_payload(outer: Path) -> Path | None:
-    direct = outer / "Payload"
-    if direct.is_file():
-        return direct
-    return next((path for path in outer.rglob("Payload") if path.is_file()), None)
+    """Find the component payload.
+
+    7-Zip 23 (Ubuntu) writes it as ``Payload~`` while 7-Zip 25 writes
+    ``Payload``, so accept both spellings.
+    """
+    candidates = [
+        path for path in outer.rglob("*") if path.is_file() and path.name.startswith("Payload")
+    ]
+    for preferred in ("Payload", "Payload~"):
+        for path in candidates:
+            if path.name == preferred:
+                return path
+    return candidates[0] if candidates else None
 
 
 def extract_pkg(package, destination, *, runner=subprocess.run, wanted=development_artifact):
@@ -204,8 +213,20 @@ def extract_pkg(package, destination, *, runner=subprocess.run, wanted=developme
 
     files = destination / "payload"
     files.mkdir(parents=True, exist_ok=True)
-    with gzip.open(payload, "rb") as stream:
-        extract_cpio(stream, files, wanted=wanted)
+    # 7-Zip 25 stores the payload's gzip bytes; 7-Zip 23 decodes the xar gzip
+    # encoding itself and leaves raw cpio. Detect instead of assuming.
+    handle = open(payload, "rb")
+    try:
+        compressed = handle.read(2) == b"\x1f\x8b"
+        handle.seek(0)
+        stream = gzip.GzipFile(fileobj=handle, mode="rb") if compressed else handle
+        try:
+            extract_cpio(stream, files, wanted=wanted)
+        finally:
+            if stream is not handle:
+                stream.close()
+    finally:
+        handle.close()
     return files
 
 
