@@ -4,6 +4,9 @@ Run by ``.github/workflows/unity-symbols.yml`` every two hours. Each run:
 lists releases, skips versions whose Release is already complete, then
 downloads, extracts, converts, and publishes up to ``--limit`` versions,
 newest first.
+
+Each version is published as one deterministic zip (library, symbol library,
+symbol JSON) plus a small manifest asset.
 """
 
 from __future__ import annotations
@@ -12,8 +15,10 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 from .catalog import STREAMS, fetch_releases, select_pending
@@ -21,14 +26,12 @@ from .extract import DownloadError, download, extract_pkg, find_development_libs
 from .publish import ReleaseStore
 from .symbols import build_document, parse_symbols
 
+# Fixed timestamp so repeated runs produce byte-identical archives.
+_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
-def asset_names(revision: str) -> list[str]:
-    return [
-        f"libunity.{revision}.arm64-v8a.so",
-        f"libunity.sym.{revision}.arm64-v8a.so",
-        f"symbols.{revision}.json",
-        f"manifest.{revision}.json",
-    ]
+
+def asset_names(version: str, revision: str) -> list[str]:
+    return [f"unity-{version}-{revision}.zip", f"manifest.{revision}.json"]
 
 
 def _sha256(path) -> str:
@@ -39,10 +42,26 @@ def _sha256(path) -> str:
     return digest.hexdigest()
 
 
+def _zip_info(arcname: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(arcname, date_time=_ZIP_TIMESTAMP)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o644 << 16
+    return info
+
+
+def _add_file(archive: zipfile.ZipFile, path, arcname: str) -> None:
+    with open(path, "rb") as source, archive.open(_zip_info(arcname), "w") as target:
+        shutil.copyfileobj(source, target, 1024 * 1024)
+
+
+def _add_bytes(archive: zipfile.ZipFile, data: bytes, arcname: str) -> None:
+    archive.writestr(_zip_info(arcname), data)
+
+
 def process_release(release, store, workdir, *, downloader=download, extractor=extract_pkg, finder=find_development_libs, parser=parse_symbols):
     """Produce and publish one release. Returns a result dict for the summary."""
     tag = release.tag
-    names = asset_names(release.revision)
+    names = asset_names(release.version, release.revision)
     with tempfile.TemporaryDirectory(dir=workdir, prefix=f"{release.revision}-") as tmp:
         tmp = Path(tmp)
         package = downloader(release.package_url, tmp / "android-support.pkg")
@@ -63,32 +82,53 @@ def process_release(release, store, workdir, *, downloader=download, extractor=e
             duplicates=duplicates,
         )
 
+        revision = release.revision
+        members = [
+            (lib, f"libunity.{revision}.arm64-v8a.so"),
+            (sym, f"libunity.sym.{revision}.arm64-v8a.so"),
+        ]
+        symbols_json = json.dumps(document, ensure_ascii=False, sort_keys=True).encode()
+
         output = tmp / "out"
         output.mkdir()
-        files = [output / name for name in names]
-        files[0].write_bytes(lib.read_bytes())
-        files[1].write_bytes(sym.read_bytes())
-        files[2].write_text(json.dumps(document, ensure_ascii=False, sort_keys=True))
+        zip_path = output / names[0]
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            for source, arcname in members:
+                _add_file(archive, source, arcname)
+            _add_bytes(archive, symbols_json, f"symbols.{revision}.json")
 
         manifest = {
             "unity_version": release.version,
-            "short_revision": release.revision,
+            "short_revision": revision,
             "tag": tag,
             "variant": document["variant"],
             "abi": document["abi"],
             "symbol_count": document["symbol_count"],
+            "zip": {
+                "name": zip_path.name,
+                "size": zip_path.stat().st_size,
+                "sha256": _sha256(zip_path),
+            },
             "files": [
-                {"name": path.name, "size": path.stat().st_size, "sha256": _sha256(path)}
-                for path in files[:3]
+                {"name": arcname, "size": Path(source).stat().st_size, "sha256": _sha256(source)}
+                for source, arcname in members
+            ]
+            + [
+                {
+                    "name": f"symbols.{revision}.json",
+                    "size": len(symbols_json),
+                    "sha256": hashlib.sha256(symbols_json).hexdigest(),
+                }
             ],
         }
-        files[3].write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
+        manifest_path = output / names[1]
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
 
-        store.ensure_draft(tag, f"Unity {release.version} ({release.revision})")
-        store.upload(tag, files)
+        store.ensure_draft(tag, f"Unity {release.version} ({revision})")
+        store.upload(tag, [zip_path, manifest_path])
         store.publish(tag)
 
-        return {"version": release.version, "revision": release.revision, "tag": tag,
+        return {"version": release.version, "revision": revision, "tag": tag,
                 "status": "published", "symbols": document["symbol_count"]}
 
 
@@ -131,7 +171,9 @@ def main(argv=None) -> int:
         store = ReleaseStore(args.repo)
         pending = select_pending(
             releases,
-            lambda release: store.is_complete(release.tag, asset_names(release.revision)),
+            lambda release: store.is_complete(
+                release.tag, asset_names(release.version, release.revision)
+            ),
             args.limit,
         )
 

@@ -10,17 +10,25 @@ up to two versions, newest first.
 ## Releases
 
 Each version becomes one GitHub Release tagged
-`unity-<version>-<shortRevision>` with four assets:
+`unity-<version>-<shortRevision>` with two assets:
 
 | Asset | Contents |
+| --- | --- |
+| `unity-<version>-<rev>.zip` | deterministic zip with the library, symbol library and symbol JSON |
+| `manifest.<rev>.json` | member sizes and SHA-256, plus the zip's own size and hash |
+
+Zip members:
+
+| Member | Contents |
 | --- | --- |
 | `libunity.<rev>.arm64-v8a.so` | `Variations/il2cpp/Development/Libs/arm64-v8a/libunity.so` |
 | `libunity.sym.<rev>.arm64-v8a.so` | `Variations/il2cpp/Development/Symbols/arm64-v8a/libunity.sym.so` |
 | `symbols.<rev>.json` | symbol name → `0x…` address, plus hashes and counts |
-| `manifest.<rev>.json` | per-file size and SHA-256 for integrity checks |
 
-`symbols.<rev>.json` keeps the global/weak definition when a name is
-duplicated; the losing entries are listed under `duplicate_symbols`.
+The zip cuts the download from ~164 MB of raw assets to ~50 MB. It uses a fixed
+member timestamp, so the same inputs produce the same archive. `symbols.<rev>.json`
+keeps the global/weak definition when a name is duplicated; the losing entries
+are listed under `duplicate_symbols`.
 
 ## Decisions
 
@@ -30,11 +38,12 @@ duplicated; the losing entries are listed under `duplicate_symbols`.
 - **Package**: the macOS/Linux `MacEditorTargetInstaller/*.pkg` (~0.68 GB). The
   Windows `TargetSupportInstaller/*.exe` is smaller (~0.48 GB) but its modified
   NSIS payload is not readable by 7-Zip, so the `.pkg` is used.
-- **Extraction**: `7z` unpacks the xar container; the nested `Payload` is then
-  read as gzip+newc cpio by a small pure-Python reader that keeps only the two
-  `il2cpp/Development/arm64-v8a` files.
-- **Idempotency**: a release counts as done only when it is published and all
-  four assets exist with a non-zero size. Incomplete releases are resumed.
+- **Extraction**: `7z` unpacks the xar container; the nested payload is read as
+  gzip or raw odc/newc cpio by a small pure-Python reader that keeps only the two
+  `il2cpp/Development/arm64-v8a` files. It tolerates both 7-Zip 23 (`Payload~`,
+  gzip already decoded) and 7-Zip 25 (`Payload`, gzip retained).
+- **Idempotency**: a release counts as done only when it is published and both
+  assets exist with a non-zero size. Incomplete releases are resumed.
 - **Upload**: draft → upload → publish, so consumers never see a partial release.
 - **Failure**: a download that fails three times (10 s / 30 s / 90 s backoff,
   30 min timeout) fails the job and leaves the version unpublished for the next

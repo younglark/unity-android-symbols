@@ -1,4 +1,6 @@
+import io
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -42,7 +44,7 @@ class RecordingStore:
         self.events.append(("publish", tag))
 
 
-def test_process_release_publishes_four_assets_with_manifest(tmp_path):
+def test_process_release_publishes_one_zip_and_one_manifest(tmp_path):
     release = make_release()
     lib = tmp_path / "libunity.so"
     lib.write_bytes(b"LIB")
@@ -51,10 +53,10 @@ def test_process_release_publishes_four_assets_with_manifest(tmp_path):
 
     def downloader(url, destination):
         assert url == release.package_url
-        Path(destination).write_bytes(b"EXE")
+        Path(destination).write_bytes(b"PKG")
         return Path(destination)
 
-    def extractor(installer, destination):
+    def extractor(package, destination):
         Path(destination).mkdir(parents=True, exist_ok=True)
         return Path(destination)
 
@@ -80,17 +82,61 @@ def test_process_release_publishes_four_assets_with_manifest(tmp_path):
     assert result["status"] == "published"
     assert result["symbols"] == 1
     assert [event[0] for event in store.events] == ["draft", "upload", "publish"]
-    assert sorted(store.uploaded) == sorted(asset_names("aaa"))
 
-    symbols_document = json.loads(store.uploaded["symbols.aaa.json"])
-    assert symbols_document["symbols"] == {"alpha": "0x10"}
-    assert symbols_document["short_revision"] == "aaa"
+    names = asset_names("2022.3.62f1", "aaa")
+    assert sorted(store.uploaded) == sorted(names)
 
-    manifest = json.loads(store.uploaded["manifest.aaa.json"])
+    with zipfile.ZipFile(io.BytesIO(store.uploaded[names[0]])) as archive:
+        assert sorted(archive.namelist()) == [
+            "libunity.aaa.arm64-v8a.so",
+            "libunity.sym.aaa.arm64-v8a.so",
+            "symbols.aaa.json",
+        ]
+        assert archive.read("libunity.aaa.arm64-v8a.so") == b"LIB"
+        assert archive.read("libunity.sym.aaa.arm64-v8a.so") == b"SYM"
+        symbols_document = json.loads(archive.read("symbols.aaa.json"))
+        assert symbols_document["symbols"] == {"alpha": "0x10"}
+        assert symbols_document["short_revision"] == "aaa"
+
+    manifest = json.loads(store.uploaded[names[1]])
     assert manifest["unity_version"] == "2022.3.62f1"
     assert manifest["symbol_count"] == 1
-    assert {entry["name"] for entry in manifest["files"]} == set(asset_names("aaa")[:3])
-    assert all(entry["size"] > 0 and len(entry["sha256"]) == 64 for entry in manifest["files"])
+    assert manifest["zip"]["name"] == names[0]
+    assert manifest["zip"]["size"] == len(store.uploaded[names[0]])
+    assert len(manifest["zip"]["sha256"]) == 64
+    assert {entry["name"] for entry in manifest["files"]} == {
+        "libunity.aaa.arm64-v8a.so",
+        "libunity.sym.aaa.arm64-v8a.so",
+        "symbols.aaa.json",
+    }
+    assert all(len(entry["sha256"]) == 64 and entry["size"] > 0 for entry in manifest["files"])
+
+
+def test_process_release_is_deterministic(tmp_path):
+    release = make_release()
+    lib = tmp_path / "libunity.so"
+    lib.write_bytes(b"LIB")
+    sym = tmp_path / "libunity.sym.so"
+    sym.write_bytes(b"SYM")
+
+    def downloader(url, destination):
+        Path(destination).write_bytes(b"PKG")
+        return Path(destination)
+
+    def run():
+        store = RecordingStore()
+        process_release(
+            release,
+            store,
+            tmp_path,
+            downloader=downloader,
+            extractor=lambda package, destination: Path(destination),
+            finder=lambda root: (lib, sym),
+            parser=lambda path: ({"alpha": "0x10"}, []),
+        )
+        return store.uploaded[asset_names("2022.3.62f1", "aaa")[0]]
+
+    assert run() == run()
 
 
 def test_process_release_skips_when_development_variant_is_missing(tmp_path):
@@ -98,10 +144,10 @@ def test_process_release_skips_when_development_variant_is_missing(tmp_path):
     store = RecordingStore()
 
     def downloader(url, destination):
-        Path(destination).write_bytes(b"EXE")
+        Path(destination).write_bytes(b"PKG")
         return Path(destination)
 
-    def extractor(installer, destination):
+    def extractor(package, destination):
         Path(destination).mkdir(parents=True, exist_ok=True)
         return Path(destination)
 
@@ -131,7 +177,7 @@ def test_process_release_propagates_download_failure(tmp_path):
             RecordingStore(),
             tmp_path,
             downloader=downloader,
-            extractor=lambda installer, destination: Path(destination),
+            extractor=lambda package, destination: Path(destination),
             finder=lambda root: None,
             parser=lambda path: ({}, []),
         )
