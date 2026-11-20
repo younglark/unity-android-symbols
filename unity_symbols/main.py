@@ -21,7 +21,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from .catalog import STREAMS, fetch_releases, select_pending
+from .catalog import STREAMS, fetch_releases, resolve_archived_release, select_pending
 from .extract import DownloadError, download, extract_pkg, find_development_libs
 from .publish import ReleaseStore
 from .symbols import build_document, parse_symbols
@@ -153,11 +153,18 @@ def main(argv=None) -> int:
     parser.add_argument("--limit", type=int, default=int(os.environ.get("LIMIT", "2")))
     parser.add_argument("--version", default=os.environ.get("VERSION") or None,
                         help="process only this Unity version (e.g. 2022.3.62f1)")
+    parser.add_argument("--revision", default=os.environ.get("REVISION") or None,
+                        help="changeset for a --version missing from the release API "
+                             "(e.g. 45bc4c630002)")
     parser.add_argument("--streams", default=",".join(STREAMS))
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--workdir", default=None)
     args = parser.parse_args(argv)
+    args.revision = args.revision or None
+
+    if args.revision and not args.version:
+        parser.error("--revision requires --version")
 
     streams = tuple(part.strip() for part in args.streams.split(",") if part.strip())
     releases = fetch_releases(streams=streams)
@@ -165,10 +172,19 @@ def main(argv=None) -> int:
 
     if args.version:
         matches = [release for release in releases if release.version == args.version]
-        if not matches:
-            print(f"error: Unity version not found in the catalog: {args.version}", file=sys.stderr)
-            return 1
-        requested = matches[0]
+        if matches:
+            requested = matches[0]
+        else:
+            requested = resolve_archived_release(args.version, revision=args.revision)
+            if requested is None:
+                print(f"error: Unity version not found in the catalog: {args.version}", file=sys.stderr)
+                print("hint: for an extended-support release, pass its changeset: "
+                      "--revision <changeset> (the value after the '/' in the "
+                      "unityhub:// install link)", file=sys.stderr)
+                return 1
+            source = "the given changeset" if args.revision else "the unity.com release page"
+            print(f"catalog: {args.version} is not listed by the release API; "
+                  f"resolved it from {source}")
         if requested.package_url is None:
             print(f"error: no Android pkg for Unity {requested.version}", file=sys.stderr)
             return 1

@@ -8,12 +8,22 @@ package that contains the il2cpp Development arm64-v8a player.
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
 API = "https://services.api.unity.com/unity/editor/release/v1/releases"
+DOWNLOAD = "https://download.unity3d.com/download_unity"
+# unity.com sends some networks to a regional landing page; the /en/ locale
+# path is tried first, then the bare path.
+RELEASE_PAGES = (
+    "https://unity.com/en/releases/editor/whats-new/{version}",
+    "https://unity.com/releases/editor/whats-new/{version}",
+)
 STREAMS = ("LTS", "SUPPORTED")
+_VERSION = re.compile(r"\d{1,4}\.\d+\.\d+[abfp]\d+")
+_REVISION = re.compile(r"[0-9a-z]{12}")
 
 
 @dataclass(frozen=True)
@@ -34,6 +44,64 @@ def _http_json(url: str, timeout: float = 30.0) -> dict:
     request = urllib.request.Request(url, headers={"User-Agent": "unity-android-symbols"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
+
+
+def _http_text(url: str, timeout: float = 30.0) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": "unity-android-symbols"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def resolve_archived_release(
+    version: str, revision: str | None = None, fetch=_http_text
+) -> Release | None:
+    """Resolve a version the release API does not list.
+
+    Extended-support ("3-year LTS") patches, such as 2021.3.57f2, are missing
+    from the public API but still published on unity.com and downloadable from
+    the CDN. The changeset can be passed directly (it is the second half of the
+    ``unityhub://`` install link); otherwise it is read from the release page.
+    """
+    if not _VERSION.fullmatch(version):
+        return None
+
+    if not revision:
+        hub = None
+        page = ""
+        for template in RELEASE_PAGES:
+            try:
+                page = fetch(template.format(version=version))
+            except OSError:
+                continue
+            hub = re.search(rf"unityhub://{re.escape(version)}/([0-9a-z]{{12}})", page)
+            if hub is not None:
+                break
+        if hub is None:
+            return None
+        revision = hub.group(1)
+        package = re.search(
+            rf"https://download\.unity3d\.com/download_unity/{revision}/"
+            rf"MacEditorTargetInstaller/UnitySetup-Android-Support-for-Editor-"
+            rf"{re.escape(version)}\.pkg",
+            page,
+        )
+        package_url = package.group(0) if package else None
+    else:
+        if not _REVISION.fullmatch(revision):
+            return None
+        package_url = (
+            f"{DOWNLOAD}/{revision}/MacEditorTargetInstaller/"
+            f"UnitySetup-Android-Support-for-Editor-{version}.pkg"
+        )
+
+    return Release(
+        version=version,
+        revision=revision,
+        stream="EXTENDED",
+        release_date="",
+        package_url=package_url,
+        package_size=None,
+    )
 
 
 def _android_package(item: dict) -> tuple[str | None, int | None]:

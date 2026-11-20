@@ -219,11 +219,42 @@ def test_main_skips_a_requested_version_that_is_already_complete(monkeypatch, ca
 
 def test_main_rejects_an_unknown_version(monkeypatch, capsys):
     monkeypatch.setattr(main_module, "fetch_releases", lambda streams: [make_release()])
+    monkeypatch.setattr(main_module, "resolve_archived_release", lambda version, revision=None: None)
 
     exit_code = main_module.main(["--repo", "owner/repo", "--version", "1999.1.1f1"])
 
     assert exit_code == 1
     assert "not found" in capsys.readouterr().err
+
+
+def test_main_resolves_a_version_missing_from_the_release_api(monkeypatch, capsys):
+    release = make_release("2021.3.57f2", "45bc4c630002")
+    seen = {}
+
+    def fake_resolve(version, revision=None):
+        seen.update(version=version, revision=revision)
+        return release
+
+    monkeypatch.setattr(main_module, "fetch_releases", lambda streams: [make_release()])
+    monkeypatch.setattr(main_module, "resolve_archived_release", fake_resolve)
+    monkeypatch.setattr(main_module, "ReleaseStore", lambda repo: RecordingStore())
+    processed = []
+
+    def fake_process(requested, store, workdir):
+        processed.append(requested.version)
+        return {"version": requested.version, "revision": requested.revision,
+                "tag": requested.tag, "status": "published", "symbols": 1}
+
+    monkeypatch.setattr(main_module, "process_release", fake_process)
+
+    exit_code = main_module.main(
+        ["--repo", "owner/repo", "--version", "2021.3.57f2", "--revision", ""]
+    )
+
+    assert exit_code == 0
+    assert processed == ["2021.3.57f2"]
+    assert seen == {"version": "2021.3.57f2", "revision": None}
+    assert "resolved it from the unity.com release page" in capsys.readouterr().out
 
 
 def test_main_dry_run_lists_pending_without_network(monkeypatch, capsys):

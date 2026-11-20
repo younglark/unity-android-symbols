@@ -14,6 +14,10 @@ on:
         description: Process only this Unity version (for example 2022.3.62f1)
         required: false
         default: ''
+      revision:
+        description: Changeset for a version missing from the release API (optional)
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -45,4 +49,5 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           LIMIT: ${{ github.event.inputs.limit || '2' }}
           VERSION: ${{ github.event.inputs.version }}
-        run: python -m unity_symbols.main --limit "$LIMIT" --version "$VERSION"
+          REVISION: ${{ github.event.inputs.revision }}
+        run: python -m unity_symbols.main --limit "$LIMIT" --version "$VERSION" --revision "$REVISION"

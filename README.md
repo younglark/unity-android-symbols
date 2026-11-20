@@ -59,10 +59,22 @@ gh workflow run unity-symbols.yml
 
 # process exactly one version, even an old one outside the newest-first queue
 gh workflow run unity-symbols.yml -f version=2022.3.62f1
+
+# extended-support ("3-year LTS") patch: pass the changeset from the
+# release page's unityhub:// install link, e.g. unityhub://2021.3.57f2/45bc4c630002
+gh workflow run unity-symbols.yml -f version=2021.3.57f2 -f revision=45bc4c630002
 ```
 
 A requested version that is already complete is a no-op; an unknown version, or
 one without an Android package, fails the run with a clear message.
+
+Extended-support patches (Unity's "3-year LTS" line, for example `2021.3.57f2`)
+are absent from the public release API. `--revision` supplies the changeset and
+builds the known CDN package URL. Without it, the run tries the version's page
+on `unity.com`, which carries the changeset in its `unityhub://` link; some
+networks are redirected to a regional landing page, in which case the run fails
+with a hint to pass `--revision`. These versions are not part of the scheduled
+newest-first queue; request them explicitly.
 
 ## Running locally
 

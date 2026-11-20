@@ -1,6 +1,8 @@
 import urllib.parse
 
-from unity_symbols.catalog import fetch_releases, select_pending
+import pytest
+
+from unity_symbols.catalog import fetch_releases, resolve_archived_release, select_pending
 
 
 def make_item(version, revision, date, *, android=True, pkg=True, stream="LTS"):
@@ -86,3 +88,90 @@ def test_select_pending_applies_limit():
     pending = select_pending(releases, lambda release: False, limit=1)
 
     assert [release.version for release in pending] == ["2022.3.62f1"]
+
+
+RELEASE_PAGE = """
+<a href="unityhub://2021.3.57f2/45bc4c630002">Install</a>
+<a href="https://download.unity3d.com/download_unity/45bc4c630002/MacEditorTargetInstaller/UnitySetup-Android-Support-for-Editor-2021.3.57f2.pkg">Android</a>
+"""
+
+
+def test_resolve_archived_release_reads_changeset_and_android_package():
+    release = resolve_archived_release("2021.3.57f2", fetch=lambda url: RELEASE_PAGE)
+
+    assert release.version == "2021.3.57f2"
+    assert release.revision == "45bc4c630002"
+    assert release.package_url == (
+        "https://download.unity3d.com/download_unity/45bc4c630002/"
+        "MacEditorTargetInstaller/UnitySetup-Android-Support-for-Editor-2021.3.57f2.pkg"
+    )
+    assert release.tag == "unity-2021.3.57f2-45bc4c630002"
+
+
+def test_resolve_archived_release_marks_versions_without_an_android_package():
+    page = '<a href="unityhub://2021.3.57f2/45bc4c630002">Install</a>'
+
+    release = resolve_archived_release("2021.3.57f2", fetch=lambda url: page)
+
+    assert release.revision == "45bc4c630002"
+    assert release.package_url is None
+
+
+def test_resolve_archived_release_falls_back_when_a_locale_serves_the_wrong_page():
+    requested = []
+
+    def fetch(url):
+        requested.append(url)
+        if "/en/" in url:
+            return "<html>regional landing page</html>"
+        return RELEASE_PAGE
+
+    release = resolve_archived_release("2021.3.57f2", fetch=fetch)
+
+    assert release.revision == "45bc4c630002"
+    assert requested == [
+        "https://unity.com/en/releases/editor/whats-new/2021.3.57f2",
+        "https://unity.com/releases/editor/whats-new/2021.3.57f2",
+    ]
+
+
+def test_resolve_archived_release_uses_a_given_changeset_without_fetching():
+    release = resolve_archived_release(
+        "2021.3.57f2",
+        revision="45bc4c630002",
+        fetch=lambda url: pytest.fail("must not fetch"),
+    )
+
+    assert release.revision == "45bc4c630002"
+    assert release.package_url == (
+        "https://download.unity3d.com/download_unity/45bc4c630002/"
+        "MacEditorTargetInstaller/UnitySetup-Android-Support-for-Editor-2021.3.57f2.pkg"
+    )
+
+
+def test_resolve_archived_release_treats_an_empty_changeset_as_missing():
+    release = resolve_archived_release(
+        "2021.3.57f2", revision="", fetch=lambda url: RELEASE_PAGE
+    )
+
+    assert release.revision == "45bc4c630002"
+
+
+def test_resolve_archived_release_rejects_a_malformed_changeset():
+    assert resolve_archived_release(
+        "2021.3.57f2", revision="../../etc", fetch=lambda url: pytest.fail("must not fetch")
+    ) is None
+
+
+def test_resolve_archived_release_rejects_unknown_and_malformed_versions():
+    assert resolve_archived_release("1999.1.1f1", fetch=lambda url: "<html></html>") is None
+    assert resolve_archived_release(
+        "../../etc/passwd", fetch=lambda url: pytest.fail("must not fetch")
+    ) is None
+
+
+def test_resolve_archived_release_survives_an_unreachable_page():
+    def offline(url):
+        raise OSError("network down")
+
+    assert resolve_archived_release("2021.3.57f2", fetch=offline) is None
